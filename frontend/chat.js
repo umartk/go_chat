@@ -5,6 +5,9 @@ class ChatApp {
         this.username = localStorage.getItem('chatUsername');
         this.isLogin = true;
         
+        // Configurable server URL - change this to match your server
+        this.serverUrl = 'http://localhost:8080';
+        
         // DOM elements
         this.authSection = document.getElementById('auth-section');
         this.chatSection = document.getElementById('chat-section');
@@ -85,9 +88,11 @@ class ChatApp {
         }
 
         const endpoint = this.isLogin ? '/api/login' : '/api/register';
+        const fullUrl = `${this.serverUrl}${endpoint}`;
         
         try {
-            const response = await fetch(endpoint, {
+            console.log('Making request to:', fullUrl);
+            const response = await fetch(fullUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -95,7 +100,11 @@ class ChatApp {
                 body: JSON.stringify({ username, password }),
             });
 
+            console.log('Response status:', response.status);
+            console.log('Response headers:', response.headers);
+
             const data = await response.json();
+            console.log('Response data:', data);
 
             if (response.ok) {
                 this.token = data.token;
@@ -115,8 +124,8 @@ class ChatApp {
                 this.showAuthMessage(data.message || 'Authentication failed', 'error');
             }
         } catch (error) {
-            console.error('Auth error:', error);
-            this.showAuthMessage('Network error. Please try again.', 'error');
+            console.error('Auth error details:', error);
+            this.showAuthMessage(`Network error: ${error.message}`, 'error');
         }
     }
 
@@ -174,9 +183,12 @@ class ChatApp {
         }
 
         try {
-            // Use relative WebSocket URL to avoid CORS issues
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(this.token)}`;
+            // Use configurable server URL for WebSocket connection
+            const wsProtocol = this.serverUrl.startsWith('https') ? 'wss:' : 'ws:';
+            const wsHost = this.serverUrl.replace(/^https?:\/\//, '');
+            const wsUrl = `${wsProtocol}//${wsHost}/ws?token=${encodeURIComponent(this.token)}`;
+            
+            console.log('Connecting to WebSocket:', wsUrl);
             this.ws = new WebSocket(wsUrl);
             
             this.ws.onopen = () => {

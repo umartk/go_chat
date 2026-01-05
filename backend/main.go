@@ -108,6 +108,16 @@ func checkPasswordHash(password, hash string) bool {
 }
 
 func registerHandler(w http.ResponseWriter, r *http.Request) {
+	// Set CORS headers explicitly for this handler
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -158,6 +168,16 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
+	// Set CORS headers explicitly for this handler
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -329,10 +349,14 @@ func handleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Set CORS headers with wildcard
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Methods", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "*")
+		w.Header().Set("Access-Control-Expose-Headers", "*")
+		w.Header().Set("Access-Control-Max-Age", "86400")
 
+		// Handle preflight requests
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -342,24 +366,53 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// Global CORS middleware for all requests
+func globalCorsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Set CORS headers with wildcard for all requests
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "*")
+		w.Header().Set("Access-Control-Expose-Headers", "*")
+		w.Header().Set("Access-Control-Max-Age", "86400")
+
+		// Handle preflight requests
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	hub := newHub()
 	go hub.run()
 
-	// API routes with CORS
-	http.HandleFunc("/api/register", corsMiddleware(registerHandler))
-	http.HandleFunc("/api/login", corsMiddleware(loginHandler))
+	// Create a new ServeMux
+	mux := http.NewServeMux()
+
+	// API routes - remove the corsMiddleware wrapper since we handle CORS in each handler
+	mux.HandleFunc("/api/register", registerHandler)
+	mux.HandleFunc("/api/login", loginHandler)
 	
 	// WebSocket route
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		handleWebSocket(hub, w, r)
 	})
 
 	// Serve static files
 	fs := http.FileServer(http.Dir("../frontend/"))
-	http.Handle("/", fs)
+	mux.Handle("/", fs)
+
+	// Wrap the entire mux with global CORS middleware
+	handler := globalCorsMiddleware(mux)
 
 	log.Println("Chat server starting on :8080")
 	log.Println("Default users: admin/password, user1/password")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Println("")
+	log.Println("IMPORTANT: Access the app via http://localhost:8080")
+	log.Println("Do NOT open the HTML file directly from file system!")
+	log.Fatal(http.ListenAndServe(":8080", handler))
 }
