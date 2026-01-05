@@ -5,30 +5,36 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
+	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
 )
 
-var jwtSecret = []byte("your-secret-key-change-in-production")
-
-type User struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+// Config holds application configuration
+type Config struct {
+	JWTSecret  string
+	ServerPort string
 }
 
+var config Config
+
+// Models
 type LoginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
 type LoginResponse struct {
-	Token    string `json:"token"`
-	Username string `json:"username"`
-	Message  string `json:"message,omitempty"`
+	Token    string `json:"token,omitempty"`
+	Username string `json:"username,omitempty"`
+	Message  string `json:"message"`
+	Success  bool   `json:"success"`
 }
 
 type Message struct {
@@ -37,182 +43,134 @@ type Message struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+type Claims struct {
+	Username string `json:"username"`
+	jwt.RegisteredClaims
+}
+
+// Client represents a WebSocket client
 type Client struct {
 	conn     *websocket.Conn
 	send     chan Message
 	username string
 }
 
+// Hub manages all WebSocket clients
 type Hub struct {
 	clients    map[*Client]bool
 	broadcast  chan Message
 	register   chan *Client
 	unregister chan *Client
+	mu         sync.RWMutex
 }
 
-type Claims struct {
-	Username string `json:"username"`
-	jwt.RegisteredClaims
+// UserStore manages users (in-memory, use database in production)
+type UserStore struct {
+	users map[string]string
+	mu    sync.RWMutex
 }
 
-// Simple in-memory user store (use database in production)
-var users = map[string]string{
-	"admin": "$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi", // password: "password"
-	"user1": "$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi", // password: "password"
+var (
+	userStore = &UserStore{users: make(map[string]string)}
+	upgrader  = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
+)
+
+// Initialize configuration from environment
+func initConfig() {
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using defaults")
+	}
+
+	config = Config{
+		JWTSecret:  getEnv("JWT_SECRET", "default-secret-change-me"),
+		ServerPort: getEnv("SERVER_PORT", "8080"),
+	}
+
+	// Initialize default users
+	initDefaultUsers()
 }
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow connections from any origin
-	},
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }
 
+func initDefaultUsers() {
+	adminUser := getEnv("DEFAULT_ADMIN_USER", "admin")
+	adminPass := getEnv("DEFAULT_ADMIN_PASSWORD", "password")
+	defaultUser := getEnv("DEFAULT_USER", "user1")
+	defaultPass := getEnv("DEFAULT_USER_PASSWORD", "password")
+
+	if hash, err := hashPassword(adminPass); err == nil {
+		userStore.users[adminUser] = hash
+	}
+	if hash, err := hashPassword(defaultPass); err == nil {
+		userStore.users[defaultUser] = hash
+	}
+}
+
+// JWT functions
 func generateJWT(username string) (string, error) {
-	expirationTime := time.Now().Add(24 * time.Hour)
 	claims := &Claims{
 		Username: username,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expirationTime),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
-
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtSecret)
+	return token.SignedString([]byte(config.JWTSecret))
 }
 
 func validateJWT(tokenString string) (*Claims, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-		return jwtSecret, nil
+		return []byte(config.JWTSecret), nil
 	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	if !token.Valid {
+	if err != nil || !token.Valid {
 		return nil, fmt.Errorf("invalid token")
 	}
-
 	return claims, nil
 }
 
+// Password functions
 func hashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
 	return string(bytes), err
 }
 
 func checkPasswordHash(password, hash string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-	return err == nil
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
-func registerHandler(w http.ResponseWriter, r *http.Request) {
-	// Set CORS headers explicitly for this handler
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-	if r.Method == "OPTIONS" {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-
-	if req.Username == "" || req.Password == "" {
-		http.Error(w, "Username and password required", http.StatusBadRequest)
-		return
-	}
-
-	// Check if user already exists
-	if _, exists := users[req.Username]; exists {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(LoginResponse{Message: "User already exists"})
-		return
-	}
-
-	// Hash password
-	hashedPassword, err := hashPassword(req.Password)
-	if err != nil {
-		http.Error(w, "Error creating user", http.StatusInternalServerError)
-		return
-	}
-
-	// Store user
-	users[req.Username] = hashedPassword
-
-	// Generate JWT
-	token, err := generateJWT(req.Username)
-	if err != nil {
-		http.Error(w, "Error generating token", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(LoginResponse{
-		Token:    token,
-		Username: req.Username,
-		Message:  "Registration successful",
-	})
+// UserStore methods
+func (s *UserStore) Get(username string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	hash, exists := s.users[username]
+	return hash, exists
 }
 
-func loginHandler(w http.ResponseWriter, r *http.Request) {
-	// Set CORS headers explicitly for this handler
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-	if r.Method == "OPTIONS" {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-
-	// Check if user exists and password is correct
-	hashedPassword, exists := users[req.Username]
-	if !exists || !checkPasswordHash(req.Password, hashedPassword) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(LoginResponse{Message: "Invalid credentials"})
-		return
-	}
-
-	// Generate JWT
-	token, err := generateJWT(req.Username)
-	if err != nil {
-		http.Error(w, "Error generating token", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(LoginResponse{
-		Token:    token,
-		Username: req.Username,
-		Message:  "Login successful",
-	})
+func (s *UserStore) Set(username, hash string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.users[username] = hash
 }
 
+func (s *UserStore) Exists(username string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, exists := s.users[username]
+	return exists
+}
+
+// Hub methods
 func newHub() *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
@@ -226,17 +184,22 @@ func (h *Hub) run() {
 	for {
 		select {
 		case client := <-h.register:
+			h.mu.Lock()
 			h.clients[client] = true
-			log.Printf("Client %s connected. Total clients: %d", client.username, len(h.clients))
+			h.mu.Unlock()
+			log.Printf("Client %s connected. Total: %d", client.username, len(h.clients))
 
 		case client := <-h.unregister:
+			h.mu.Lock()
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
 				close(client.send)
-				log.Printf("Client %s disconnected. Total clients: %d", client.username, len(h.clients))
 			}
+			h.mu.Unlock()
+			log.Printf("Client %s disconnected. Total: %d", client.username, len(h.clients))
 
 		case message := <-h.broadcast:
+			h.mu.RLock()
 			for client := range h.clients {
 				select {
 				case client.send <- message:
@@ -245,10 +208,12 @@ func (h *Hub) run() {
 					delete(h.clients, client)
 				}
 			}
+			h.mu.RUnlock()
 		}
 	}
 }
 
+// Client methods
 func (c *Client) readPump(hub *Hub) {
 	defer func() {
 		hub.unregister <- c
@@ -264,10 +229,9 @@ func (c *Client) readPump(hub *Hub) {
 
 	for {
 		var msg Message
-		err := c.conn.ReadJSON(&msg)
-		if err != nil {
+		if err := c.conn.ReadJSON(&msg); err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("error: %v", err)
+				log.Printf("WebSocket error: %v", err)
 			}
 			break
 		}
@@ -292,9 +256,7 @@ func (c *Client) writePump() {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-
 			if err := c.conn.WriteJSON(message); err != nil {
-				log.Println(err)
 				return
 			}
 
@@ -307,13 +269,117 @@ func (c *Client) writePump() {
 	}
 }
 
+// HTTP Handlers
+func setCORSHeaders(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+}
+
+func sendJSON(w http.ResponseWriter, status int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(data)
+}
+
+func registerHandler(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		sendJSON(w, http.StatusMethodNotAllowed, LoginResponse{Message: "Method not allowed", Success: false})
+		return
+	}
+
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, LoginResponse{Message: "Invalid request", Success: false})
+		return
+	}
+
+	if req.Username == "" || req.Password == "" {
+		sendJSON(w, http.StatusBadRequest, LoginResponse{Message: "Username and password required", Success: false})
+		return
+	}
+
+	if len(req.Username) < 3 || len(req.Password) < 6 {
+		sendJSON(w, http.StatusBadRequest, LoginResponse{Message: "Username min 3 chars, password min 6 chars", Success: false})
+		return
+	}
+
+	if userStore.Exists(req.Username) {
+		sendJSON(w, http.StatusConflict, LoginResponse{Message: "Username already exists", Success: false})
+		return
+	}
+
+	hash, err := hashPassword(req.Password)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, LoginResponse{Message: "Error creating user", Success: false})
+		return
+	}
+
+	userStore.Set(req.Username, hash)
+
+	token, err := generateJWT(req.Username)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, LoginResponse{Message: "Error generating token", Success: false})
+		return
+	}
+
+	sendJSON(w, http.StatusCreated, LoginResponse{
+		Token:    token,
+		Username: req.Username,
+		Message:  "Registration successful",
+		Success:  true,
+	})
+}
+
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		sendJSON(w, http.StatusMethodNotAllowed, LoginResponse{Message: "Method not allowed", Success: false})
+		return
+	}
+
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, LoginResponse{Message: "Invalid request", Success: false})
+		return
+	}
+
+	hash, exists := userStore.Get(req.Username)
+	if !exists || !checkPasswordHash(req.Password, hash) {
+		sendJSON(w, http.StatusUnauthorized, LoginResponse{Message: "Invalid credentials", Success: false})
+		return
+	}
+
+	token, err := generateJWT(req.Username)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, LoginResponse{Message: "Error generating token", Success: false})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, LoginResponse{
+		Token:    token,
+		Username: req.Username,
+		Message:  "Login successful",
+		Success:  true,
+	})
+}
+
 func handleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
-	// Extract token from query parameter or header
 	token := r.URL.Query().Get("token")
 	if token == "" {
-		authHeader := r.Header.Get("Authorization")
-		if strings.HasPrefix(authHeader, "Bearer ") {
-			token = strings.TrimPrefix(authHeader, "Bearer ")
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			token = strings.TrimPrefix(auth, "Bearer ")
 		}
 	}
 
@@ -322,7 +388,6 @@ func handleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate JWT token
 	claims, err := validateJWT(token)
 	if err != nil {
 		http.Error(w, "Invalid token", http.StatusUnauthorized)
@@ -331,7 +396,7 @@ func handleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println(err)
+		log.Printf("WebSocket upgrade error: %v", err)
 		return
 	}
 
@@ -342,62 +407,21 @@ func handleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	}
 
 	hub.register <- client
-
 	go client.writePump()
 	go client.readPump(hub)
 }
 
-func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Set CORS headers with wildcard
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "*")
-		w.Header().Set("Access-Control-Expose-Headers", "*")
-		w.Header().Set("Access-Control-Max-Age", "86400")
-
-		// Handle preflight requests
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		next(w, r)
-	}
-}
-
-// Global CORS middleware for all requests
-func globalCorsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Set CORS headers with wildcard for all requests
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "*")
-		w.Header().Set("Access-Control-Expose-Headers", "*")
-		w.Header().Set("Access-Control-Max-Age", "86400")
-
-		// Handle preflight requests
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}
-
 func main() {
+	initConfig()
+
 	hub := newHub()
 	go hub.run()
 
-	// Create a new ServeMux
 	mux := http.NewServeMux()
 
-	// API routes - remove the corsMiddleware wrapper since we handle CORS in each handler
+	// API routes
 	mux.HandleFunc("/api/register", registerHandler)
 	mux.HandleFunc("/api/login", loginHandler)
-	
-	// WebSocket route
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		handleWebSocket(hub, w, r)
 	})
@@ -406,13 +430,7 @@ func main() {
 	fs := http.FileServer(http.Dir("../frontend/"))
 	mux.Handle("/", fs)
 
-	// Wrap the entire mux with global CORS middleware
-	handler := globalCorsMiddleware(mux)
-
-	log.Println("Chat server starting on :8080")
-	log.Println("Default users: admin/password, user1/password")
-	log.Println("")
-	log.Println("IMPORTANT: Access the app via http://localhost:8080")
-	log.Println("Do NOT open the HTML file directly from file system!")
-	log.Fatal(http.ListenAndServe(":8080", handler))
+	log.Printf("Server starting on :%s", config.ServerPort)
+	log.Printf("Access the app at: http://localhost:%s", config.ServerPort)
+	log.Fatal(http.ListenAndServe(":"+config.ServerPort, mux))
 }
