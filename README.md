@@ -60,7 +60,7 @@ copy .env.example .env
 Edit `.env`:
 ```
 JWT_SECRET=your-secure-secret-key
-SERVER_PORT=8080
+SERVER_PORT=3000
 DEFAULT_ADMIN_USER=admin
 DEFAULT_ADMIN_PASSWORD=your-password
 ```
@@ -75,14 +75,14 @@ go run main.go
 
 ### 3. Access
 
-Open `http://localhost:8080`
+Open `http://localhost:3000`
 
 ## Frontend Configuration
 
 Edit `frontend/js/config.js`:
 ```javascript
 const CONFIG = {
-    SERVER_URL: 'http://localhost:8080',
+    SERVER_URL: 'http://localhost:3000',
     // ...
 };
 ```
