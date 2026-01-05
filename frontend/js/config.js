@@ -1,7 +1,7 @@
 // Application Configuration
 const CONFIG = {
     // Server URL - change this to match your backend server
-    SERVER_URL: 'http://localhost:8080',
+    SERVER_URL: 'http://localhost:3000',
     
     // WebSocket URL (automatically derived from SERVER_URL)
     get WS_URL() {
