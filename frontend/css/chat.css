@@ -9,6 +9,7 @@
     max-width: 1200px;
     width: 100%;
     margin: 0 auto;
+    background: var(--bg-dark);
 }
 
 .chat-header {

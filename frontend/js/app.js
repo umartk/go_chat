@@ -1,4 +1,4 @@
-// Main Application
+// Main Application with E2EE Support
 class ChatApp {
     constructor() {
         this.router = new Router();
@@ -32,6 +32,9 @@ class ChatApp {
         this.connectionStatus = document.getElementById('connection-status');
         this.currentUser = document.getElementById('current-user');
         this.logoutBtn = document.getElementById('logout-btn');
+        
+        // Sidebar elements
+        this.userList = document.getElementById('user-list');
     }
     
     initEventListeners() {
@@ -56,13 +59,15 @@ class ChatApp {
     initChatCallbacks() {
         this.chat.onMessage = (message) => this.displayMessage(message);
         this.chat.onStatusChange = (status) => this.updateConnectionStatus(status);
+        this.chat.onUserListUpdate = (users) => this.updateUserList(users);
+        this.chat.onSystemMessage = (message) => this.displaySystemMessage(message);
     }
     
     checkAuth() {
         if (this.auth.isAuthenticated()) {
             this.router.navigate('chat');
             this.currentUser.textContent = this.auth.username;
-            this.chat.connect(this.auth.token);
+            this.chat.connect(this.auth.token, this.auth.username);
         } else {
             this.router.navigate('login');
         }
@@ -82,7 +87,7 @@ class ChatApp {
                 setTimeout(() => {
                     this.router.navigate('chat');
                     this.currentUser.textContent = this.auth.username;
-                    this.chat.connect(this.auth.token);
+                    this.chat.connect(this.auth.token, this.auth.username);
                 }, 500);
             } else {
                 Utils.showMessage(this.loginMessage, result.message, 'error');
@@ -112,7 +117,7 @@ class ChatApp {
                 setTimeout(() => {
                     this.router.navigate('chat');
                     this.currentUser.textContent = this.auth.username;
-                    this.chat.connect(this.auth.token);
+                    this.chat.connect(this.auth.token, this.auth.username);
                 }, 500);
             } else {
                 Utils.showMessage(this.registerMessage, result.message, 'error');
@@ -122,9 +127,13 @@ class ChatApp {
         }
     }
     
-    handleSendMessage() {
+    async handleSendMessage() {
         const content = this.messageInput.value.trim();
-        if (content && this.chat.send(content)) {
+        if (!content) return;
+        
+        const success = await this.chat.send(content, this.currentRoom);
+        
+        if (success) {
             this.messageInput.value = '';
         }
     }
@@ -138,18 +147,50 @@ class ChatApp {
         this.router.navigate('login');
     }
     
+    updateUserList(users) {
+        if (!this.userList) return;
+        
+        this.userList.innerHTML = '';
+        
+        users.forEach(username => {
+            const userEl = document.createElement('div');
+            userEl.className = 'user-item';
+            userEl.innerHTML = `
+                <span class="user-status online"></span>
+                <span class="user-name">${Utils.escapeHtml(username)}</span>
+            `;
+            this.userList.appendChild(userEl);
+        });
+    }
+    
     displayMessage(message) {
         const isOwn = message.username === this.auth.username;
         const time = Utils.formatTime(message.timestamp);
         
         const messageEl = document.createElement('div');
         messageEl.className = `message ${isOwn ? 'own' : 'other'}`;
+        
+        const encryptedBadge = message.isEncrypted ? 
+            '<span class="encrypted-badge" title="End-to-end encrypted">🔒</span>' : '';
+        
         messageEl.innerHTML = `
             <div class="message-bubble">${Utils.escapeHtml(message.content)}</div>
             <div class="message-meta">
                 <span class="message-username">${isOwn ? 'You' : Utils.escapeHtml(message.username)}</span>
+                ${encryptedBadge}
                 <span class="message-time">${time}</span>
             </div>
+        `;
+        
+        this.messagesContainer.appendChild(messageEl);
+        this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+    }
+    
+    displaySystemMessage(message) {
+        const messageEl = document.createElement('div');
+        messageEl.className = 'message system';
+        messageEl.innerHTML = `
+            <div class="system-message">${Utils.escapeHtml(message.content)}</div>
         `;
         
         this.messagesContainer.appendChild(messageEl);
@@ -159,7 +200,7 @@ class ChatApp {
     updateConnectionStatus(status) {
         this.connectionStatus.className = `status ${status}`;
         const statusText = {
-            'connected': 'Connected',
+            'connected': 'Connected 🔒',
             'disconnected': 'Disconnected',
             'connecting': 'Connecting...'
         };

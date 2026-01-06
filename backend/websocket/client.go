@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"chat-app/models"
+	"chat-app/store"
 
 	"github.com/gorilla/websocket"
 )
@@ -22,7 +23,7 @@ func (c *Client) ReadPump() {
 		c.Conn.Close()
 	}()
 
-	c.Conn.SetReadLimit(512)
+	c.Conn.SetReadLimit(4096)
 	c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	c.Conn.SetPongHandler(func(string) error {
 		c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
@@ -37,9 +38,45 @@ func (c *Client) ReadPump() {
 			}
 			break
 		}
+
 		msg.Username = c.Username
 		msg.Timestamp = time.Now()
+		msg.RoomID = "general"
+
+		c.handleMessage(msg)
+	}
+}
+
+func (c *Client) handleMessage(msg models.Message) {
+	switch msg.Type {
+	case models.MsgTypeChat:
 		c.Hub.Broadcast <- msg
+
+	case models.MsgTypeRoomKey:
+		// Forward room key to specific recipient
+		c.Hub.SendToUser(msg.Recipient, msg)
+
+	case models.MsgTypeRequestKey:
+		// Broadcast key request to all users
+		c.handleKeyRequest(msg)
+
+	default:
+		c.Hub.Broadcast <- msg
+	}
+}
+
+func (c *Client) handleKeyRequest(msg models.Message) {
+	request := models.Message{
+		Type:     models.MsgTypeRequestKey,
+		RoomID:   "general",
+		Username: c.Username,
+	}
+
+	members := store.Rooms.GetMembers("general")
+	for _, member := range members {
+		if member != c.Username {
+			c.Hub.SendToUser(member, request)
+		}
 	}
 }
 

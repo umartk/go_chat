@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chat App</title>
-    <!-- CSS -->
+    <title>Secure Chat App</title>
     <link rel="stylesheet" href="css/variables.css">
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/auth.css">
     <link rel="stylesheet" href="css/chat.css">
+    <link rel="stylesheet" href="css/sidebar.css">
 </head>
 <body>
     <div id="app">
@@ -16,8 +16,8 @@
         <div id="login-page" class="page">
             <div class="auth-card">
                 <div class="auth-header">
-                    <h1>Welcome Back</h1>
-                    <p>Sign in to continue chatting</p>
+                    <h1>🔒 Secure Chat</h1>
+                    <p>End-to-end encrypted messaging</p>
                 </div>
                 <div id="login-message" class="message-box"></div>
                 <form id="login-form">
@@ -41,8 +41,8 @@
         <div id="register-page" class="page hidden">
             <div class="auth-card">
                 <div class="auth-header">
-                    <h1>Create Account</h1>
-                    <p>Join the conversation</p>
+                    <h1>🔒 Create Account</h1>
+                    <p>Join secure conversations</p>
                 </div>
                 <div id="register-message" class="message-box"></div>
                 <form id="register-form">
@@ -68,33 +68,75 @@
 
         <!-- Chat Page -->
         <div id="chat-page" class="page hidden">
-            <div class="chat-container">
-                <header class="chat-header">
-                    <div class="header-left">
-                        <h1>💬 Chat Room</h1>
-                        <span id="connection-status" class="status disconnected">Disconnected</span>
+            <div class="chat-layout">
+                <!-- Sidebar -->
+                <aside class="sidebar">
+                    <div class="sidebar-header">
+                        <h2>🔒 Secure Chat</h2>
                     </div>
-                    <div class="header-right">
-                        <span class="user-badge">👤 <span id="current-user"></span></span>
-                        <button id="logout-btn" class="btn btn-outline">Logout</button>
+                    
+                    <div class="sidebar-section">
+                        <div class="section-header">
+                            <h3>Chat Room</h3>
+                        </div>
+                        <div id="room-list" class="item-list">
+                            <div class="room-item active">
+                                <span class="room-icon">#</span>
+                                <span class="room-name">general</span>
+                                <span class="encryption-badge" title="End-to-end encrypted">🔒</span>
+                            </div>
+                        </div>
                     </div>
-                </header>
-                
-                <main class="chat-main">
-                    <div id="messages" class="messages-container"></div>
-                </main>
-                
-                <footer class="chat-footer">
-                    <form id="message-form" class="message-form">
-                        <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" required>
-                        <button type="submit" class="btn btn-send">
-                            <span>Send</span>
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
-                            </svg>
-                        </button>
-                    </form>
-                </footer>
+                    
+                    <div class="sidebar-section">
+                        <div class="section-header">
+                            <h3>Online Users</h3>
+                        </div>
+                        <div id="user-list" class="item-list"></div>
+                    </div>
+                    
+                    <div class="sidebar-footer">
+                        <div class="user-info">
+                            <span class="user-avatar">👤</span>
+                            <span id="current-user"></span>
+                        </div>
+                        <button id="logout-btn" class="btn btn-outline btn-sm">Logout</button>
+                    </div>
+                </aside>
+
+                <!-- Main Chat Area -->
+                <div class="chat-container">
+                    <header class="chat-header">
+                        <div class="header-left">
+                            <h1 id="chat-title"># general</h1>
+                            <span id="connection-status" class="status disconnected">Disconnected</span>
+                        </div>
+                        <div class="header-right">
+                            <span class="encryption-status" title="End-to-end encrypted">
+                                🔒 Encrypted
+                            </span>
+                        </div>
+                    </header>
+                    
+                    <main class="chat-main">
+                        <div id="messages" class="messages-container"></div>
+                    </main>
+                    
+                    <footer class="chat-footer">
+                        <form id="message-form" class="message-form">
+                            <input type="text" id="message-input" placeholder="Type an encrypted message..." autocomplete="off" required>
+                            <button type="submit" class="btn btn-send">
+                                <span>Send</span>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                                </svg>
+                            </button>
+                        </form>
+                        <div class="encryption-notice">
+                            <span>🔒 Messages are end-to-end encrypted</span>
+                        </div>
+                    </footer>
+                </div>
             </div>
         </div>
     </div>
@@ -103,6 +145,7 @@
     <script src="js/config.js"></script>
     <script src="js/utils/helpers.js"></script>
     <script src="js/router.js"></script>
+    <script src="js/services/crypto.service.js"></script>
     <script src="js/services/auth.service.js"></script>
     <script src="js/services/chat.service.js"></script>
     <script src="js/app.js"></script>
